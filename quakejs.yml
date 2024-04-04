@@ -1,0 +1,309 @@
+# -----------------------------------------------------------------------------
+# Copyright [2024] [Rampart AI, Inc.]
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# -----------------------------------------------------------------------------
+
+
+
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quakejs-proxy-ns
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: quakejs-quakeserver-ns
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: quakejs-loadbalancer
+  namespace: quakejs-proxy-ns
+spec:
+  type: LoadBalancer
+  selector:
+    app: core-nginx
+  ports:
+    - name: site
+      protocol: TCP
+      port: 31337
+      targetPort: 31337
+    - name: websocket
+      protocol: TCP
+      port: 27960
+      targetPort: 27960
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: quakejs-service
+  namespace: quakejs-quakeserver-ns
+spec:
+  type: NodePort
+  ports:
+  - name: http
+    port: 27961       #the port that the service listens on internally 
+    targetPort: 80    #the port on the pods to which traffic will be forwarded
+  - name: websocket
+    port: 27962       #the port that the service listens on internally
+    targetPort: 27960 #the port on the pods to which traffic will be forwarded
+  selector:
+    app: quakejs
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quakejs-nginx-configmap
+  namespace: quakejs-proxy-ns
+data:
+  x509-bootstrap.sh: |+
+    #############################################################################################
+    #generates a throwaway CA_KEY_LEN-bit self-signed x509 valid for X509_CERT_DURATION_DAYS days 
+    # using the following environment variables:
+    #  country: X509_CERT_C
+    #  state:   X509_CERT_ST
+    #  town:    X509_CERT_L
+    #  org:     X509_CERT_O
+    #  cname:   X509_CERT_CN
+    echo X509_CERT_C=${X509_CERT_C}
+    echo X509_CERT_ST=${X509_CERT_ST}
+    echo X509_CERT_L=${X509_CERT_L}
+    echo X509_CERT_O=${X509_CERT_O}
+    echo X509_CERT_CN=${X509_CERT_CN}
+    echo X509_CERT_DURATION_DAYS=${X509_CERT_DURATION_DAYS}
+    #
+    openssl genrsa -out server.key ${CA_KEY_LEN}
+    openssl req -new -key server.key -out server.csr -subj "/C=${X509_CERT_C}/ST=${X509_CERT_ST}/L=${X509_CERT_L}/O=${X509_CERT_O}/CN=${X509_CERT_CN}"
+    openssl x509 -req -days ${X509_CERT_DURATION_DAYS} -in server.csr -signkey server.key -out server.crt
+    #install the throwaway x509
+    mkdir -p /etc/nginx/certs
+    cp server.key /etc/nginx/certs/
+    cp server.crt /etc/nginx/certs/
+    
+    
+  nginx.conf: |+
+    events {
+    }
+    http {
+
+      # Top-level http config for websocket headers
+      # If Upgrade is defined, Connection = upgrade
+      # If Upgrade is empty, Connection = close
+      map $http_upgrade $connection_upgrade {
+          default upgrade;
+          ''      close;
+      }
+
+      proxy_buffer_size   128k;
+      proxy_buffers   4 256k;
+      proxy_busy_buffers_size   256k;
+      server {
+        listen 31337 ssl;
+        server_name  test.acme.com;
+        resolver kube-dns.kube-system valid=30s ipv6=off;
+        
+        ssl_certificate /etc/nginx/certs/server.crt;
+        ssl_certificate_key /etc/nginx/certs/server.key;
+        
+        ssl_prefer_server_ciphers on;
+        ssl_session_timeout 1d;
+        ssl_session_cache shared:SSL:50m;
+        ssl_session_tickets off;
+        
+        ssl_protocols TLSv1.2;
+        ssl_ciphers 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:ECDHE-RSA-DES-CBC3-SHA:ECDHE-ECDSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!aECDH:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA';
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-SSL-CERT $ssl_client_escaped_cert;
+        
+        add_header 'Content-Security-Policy' 'upgrade-insecure-requests';
+        
+        location / {
+          set $quake http://quakejs-service.quakejs-quakeserver-ns.svc.cluster.local:27961;
+          proxy_pass $quake;
+        }
+      }
+      
+      server {
+        listen 27960 ssl;
+        server_name  test.acme.com;
+        resolver kube-dns.kube-system valid=30s ipv6=off;
+        
+        ssl_certificate /etc/nginx/certs/server.crt;
+        ssl_certificate_key /etc/nginx/certs/server.key;
+        
+        ssl_prefer_server_ciphers on;
+        ssl_session_timeout 1d;
+        ssl_session_cache shared:SSL:50m;
+        ssl_session_tickets off;
+        
+        ssl_protocols TLSv1.2;
+        ssl_ciphers 'ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:DHE-DSS-AES128-GCM-SHA256:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-DSS-AES128-SHA256:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:DHE-RSA-AES256-SHA:ECDHE-RSA-DES-CBC3-SHA:ECDHE-ECDSA-DES-CBC3-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256:AES128-SHA:AES256-SHA:AES:CAMELLIA:DES-CBC3-SHA:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!aECDH:!EDH-DSS-DES-CBC3-SHA:!EDH-RSA-DES-CBC3-SHA:!KRB5-DES-CBC3-SHA';
+        
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-SSL-CERT $ssl_client_escaped_cert;
+
+        add_header 'Content-Security-Policy' 'upgrade-insecure-requests';
+        
+        # WebSocket support
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        location / {
+          set $quake2 http://quakejs-service.quakejs-quakeserver-ns.svc.cluster.local:27962;
+          proxy_pass $quake2;
+        }
+      }
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: quakejs-server-config
+  namespace: quakejs-quakeserver-ns
+data:
+  server.cfg: |+
+    seta sv_hostname "quakejs"
+    seta sv_maxclients 16
+    seta g_motd "Welcome to the rCTF QuakeJS Server"
+    seta g_quadfactor 3
+    seta g_gametype 0
+    seta timelimit 10
+    seta fraglimit 50
+    seta g_weaponrespawn 3
+    seta g_inactivity 3000
+    seta g_forcerespawn 0
+    seta rconpassword "quakejs31337"
+    seta bot_enable 1
+    seta bot_minplayers 6
+    seta bot_nochat 1
+    set d1 "map q3dm1 ; set nextmap vstr d2"
+    set d2 "map q3dm7 ; set nextmap vstr d3"
+    set d3 "map q3dm17 ; set nextmap vstr d1"
+    vstr d1
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quakejs-scenario-deployment
+  namespace: quakejs-quakeserver-ns
+spec:
+  selector:
+    matchLabels:
+      app: quakejs
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: quakejs
+    spec:
+      containers: 
+      - image: treyyoder/quakejs:latest
+        name: quakejs-quake
+        env:
+        - name: "HTTP_PORT"
+          value: "31337"
+        ports:
+        - containerPort: 80
+        - containerPort: 27960
+        volumeMounts:
+          - name: quakejs-server-config-vol
+            mountPath: /quakejs/base/baseq3/server.cfg
+            subPath: server.cfg
+      volumes:
+        - name: quakejs-server-config-vol
+          configMap:
+            name: quakejs-server-config
+            items:
+              - key: server.cfg
+                path: server.cfg
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-entrypoint-deployment
+  namespace: quakejs-proxy-ns
+spec:
+  selector:
+    matchLabels:
+      app: core-nginx
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: core-nginx
+    spec:
+      initContainers:
+      - name: quakejs-nginx-selfsigned-init
+        image: nginx:latest
+        command: ['/bin/sh']
+        args: ['-c', 'cp /bootstrap/local/nginx.conf /etc/nginx/nginx.conf && cp /bootstrap/local/x509-bootstrap.sh /bootstrap && cd /bootstrap && chmod +x ./x509-bootstrap.sh && ./x509-bootstrap.sh']
+        env:
+        - name: "CA_KEY_LEN"
+          value: "2048"
+        - name: "X509_CERT_CN"
+          value: "ec2-18-254-250-58.us-gov-east-1.compute.amazonaws.com"
+        - name: "X509_CERT_O"
+          value: "Acme, Inc."
+        - name: "X509_CERT_L"
+          value: "Bogotown"
+        - name: "X509_CERT_ST"
+          value: "Bogoprovince"
+        - name: "X509_CERT_C"
+          value: "US"
+        - name: "X509_CERT_DURATION_DAYS"
+          value: "1234"
+        volumeMounts:
+          - name: nginx-core-bootstrap-local-vol
+            mountPath: /bootstrap/local
+          - name: nginx-conf-vol
+            mountPath: /etc/nginx           
+      containers: 
+      - image: nginx:latest
+        name: quakejs-nginx
+        ports:
+        - containerPort: 31337
+        - containerPort: 27960
+        volumeMounts:
+          - name: nginx-conf-vol
+            mountPath: /etc/nginx/
+      volumes:
+        - name: nginx-core-bootstrap-local-vol
+          configMap:
+            name: quakejs-nginx-configmap
+            items:
+              - key: x509-bootstrap.sh
+                path: x509-bootstrap.sh
+              - key: nginx.conf
+                path: nginx.conf
+        - name: nginx-conf-vol
+          emptyDir: {}
+
