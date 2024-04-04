@@ -112,7 +112,11 @@ Cleaning up existing stack named [quakejs-stack]. This may take several minutes.
 
 ## Credits
 
+* [id Software](https://www.idsoftware.com/) created Quake III Arena and later [open sourced its code](https://github.com/id-Software/Quake-III-Arena)
+* [the ioquake3 community](https://github.com/ioquake/ioq3) continued to enhance the Quake III Arena codebase after its release
 * [criticalstack](https://github.com/criticalstack/quake-kube) did a Kubernetes POC for Quake III Arena
-* [treyyoder](https://github.com/treyyoder/quakejs-docker) authored the image used in this example
+* [treyyoder](https://github.com/treyyoder/quakejs-docker) authored the emscripten-powered image used in this example
 
 ## END
+
+

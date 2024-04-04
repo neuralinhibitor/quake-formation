@@ -270,7 +270,7 @@ spec:
         - name: "CA_KEY_LEN"
           value: "2048"
         - name: "X509_CERT_CN"
-          value: "ec2-18-254-250-58.us-gov-east-1.compute.amazonaws.com"
+          value: "example.com"
         - name: "X509_CERT_O"
           value: "Acme, Inc."
         - name: "X509_CERT_L"
