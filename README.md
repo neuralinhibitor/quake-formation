@@ -1,4 +1,4 @@
-# qubequake
+# kubequake
 An example of a fully functional [Quake III Arena](https://en.wikipedia.org/wiki/Quake_III_Arena) server deployed to the [AWS](https://aws.amazon.com/) ecosystem.
 
 ## What it does
@@ -101,6 +101,11 @@ Cleaning up existing stack named [quakejs-stack]. This may take several minutes.
 ## License
 [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt)
 
+
+## Credits
+
+* https://github.com/criticalstack/quake-kube
+* https://github.com/treyyoder/quakejs-docker
 
 ## END
 
