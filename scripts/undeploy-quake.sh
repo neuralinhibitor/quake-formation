@@ -31,7 +31,7 @@ source ./config.sh
 
 
 #point your kubectl at the eks cluster we created earlier
-aws eks update-kubeconfig --region us-gov-east-1 --name $EKS_CLUSTER_NAME
+aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER_NAME
 
 #delete any existing quakejs kubernetes deployment
 kubectl delete -f quakejs.yml
